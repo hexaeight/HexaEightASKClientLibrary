@@ -29,6 +29,7 @@ Namespace HexaEight
 
         Private LoginToken As String
         Private Resource As String
+        Private UAKOwner As String
         Private TokenSecret As String
         Private RapidAPIKey As String
         Private Hexa8RAhost As String
@@ -42,9 +43,36 @@ Namespace HexaEight
         Private Get_sharedkey_usingname_url As String
         Private Get_presharedkey_usingname_url As String
         Private Get_clientappsharedkey_usingname_url As String
+        Private Get_captcha_url As String
+        Private Get_captcha4captchaid_url As String
+        Private Shared xhttpClient As HttpClient
 
 
-        Private Function PerformHttpWebRequest(ByVal bearertoken As String, ByVal httpurl As String, ByVal Body As String, ByVal contenttype As String) As String
+        Private Function GetSessionFromHESessionDB(ByVal httpurl As String) As String
+
+            Try
+                If httpurl = "" Then
+                    Return ""
+                End If
+                Dim client = New HttpClient()
+                Dim request = New HttpRequestMessage
+                request.Method = HttpMethod.Get
+                client.DefaultRequestHeaders.Accept.Add(New MediaTypeWithQualityHeaderValue("application/json"))
+                request.RequestUri = New Uri(httpurl)
+
+                Dim response = client.SendAsync(request)
+                Dim res As String = response.GetAwaiter().GetResult().Content.ReadAsStringAsync().Result
+                Dim jsonresp = Newtonsoft.Json.JsonConvert.DeserializeObject(res)
+                Dim jsonresponse As String = jsonresp.Last.Value.First.Last.Value.ToString()
+                Return jsonresponse
+            Catch ex As Exception
+                Console.WriteLine("Exception Occured while performing HTTP Request" & ex.Message)
+                Return ""
+            End Try
+        End Function
+
+
+        Private Function xPerformHttpWebRequest(ByVal bearertoken As String, ByVal httpurl As String, ByVal Body As String, ByVal contenttype As String) As String
             Dim httpWebRequest = CType(WebRequest.Create(httpurl), HttpWebRequest)
             'httpWebRequest.ServerCertificateValidationCallback = Function() True
 
@@ -73,6 +101,68 @@ Namespace HexaEight
                     Return ""
                 End If
 
+            Catch ex As Exception
+                Console.WriteLine("Exception Occured while performing HTTP Request" & ex.Message)
+                Return ""
+            End Try
+        End Function
+
+
+        Private Function Get512EncodedHash(ByVal code As String) As String
+            Try
+                Dim shaM As SHA512Managed = New SHA512Managed()
+                Dim result = shaM.ComputeHash(System.Text.Encoding.UTF8.GetBytes(code.ToString()))
+                Return Convert.ToBase64String(result)
+            Catch
+                Return ""
+            End Try
+        End Function
+
+        Public Function Reverse(ByVal s As String) As String
+            Dim charArray As Char() = s.ToCharArray()
+            Array.Reverse(charArray)
+            Return New String(charArray)
+        End Function
+
+
+        Private Function internalgenerator2(ByVal user As String, ByVal secret As String) As String
+            Dim shaM As SHA512Managed = New SHA512Managed()
+            Dim len As Integer = secret.Length \ 2
+            Dim rpwd As String = secret.Substring(2, len)
+            Dim main = Get512EncodedHash(Reverse(rpwd) & user + Reverse(rpwd))
+            Dim ctr As Integer = 0
+
+            While ctr < 16800
+                main = Convert.ToBase64String(shaM.ComputeHash(System.Text.Encoding.UTF8.GetBytes(main.ToString())))
+                ctr += 1
+            End While
+            UAKOwner = user
+            Return main
+        End Function
+
+
+        Private Function internalgenerator(ByVal user As String, ByVal secret As String) As String
+            Dim shaM As SHA512Managed = New SHA512Managed()
+            Dim main = Get512EncodedHash(Reverse(secret) & user + Reverse(secret))
+            Dim ctr As Integer = 0
+
+            While ctr < 16800
+                main = Convert.ToBase64String(shaM.ComputeHash(System.Text.Encoding.UTF8.GetBytes(main.ToString())))
+                ctr += 1
+            End While
+            UAKOwner = user
+            Return main
+        End Function
+
+        Private Async Function PerformHttpWebRequest(ByVal bearertoken As String, ByVal httpurl As String, ByVal Body As String, ByVal contenttype As String) As Task(Of String)
+            Try
+                Dim request = New HttpRequestMessage(HttpMethod.Post, httpurl)
+                request.Headers.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearertoken)
+                request.Content = New StringContent(Body, System.Text.Encoding.UTF8, "application/text")
+                Dim respmesg = New HttpResponseMessage()
+                respmesg = Await xhttpClient.SendAsync(request)
+                respmesg.EnsureSuccessStatusCode()
+                Return Await respmesg.Content.ReadAsStringAsync()
             Catch ex As Exception
                 Console.WriteLine("Exception Occured while performing HTTP Request" & ex.Message)
                 Return ""
@@ -984,7 +1074,7 @@ Namespace HexaEight
                             'End While
 
                         Else
-                            Return Nothing
+                                Return Nothing
                         End If
                     End If
                     qbytes = BitConverter.GetBytes(encrypteddata)
@@ -1410,9 +1500,40 @@ Namespace HexaEight
         Public Sub New(ByVal ILoginToken As String, ByVal IResource As String, ByVal ISecret As String)
             LoginToken = ILoginToken
             Resource = IResource
+            UAKOwner = ""
             TokenSecret = Convert.ToBase64String(GenSHA512Byte(ISecret))
             Hexa8RAhost = "hexaeight-sso-platform.p.rapidapi.com"
+            xhttpClient = New HttpClient()
         End Sub
+
+        Public Sub New(ByVal ILoginToken As String, ByVal IResource As String, ByVal owner As String, ByVal ISecret As String, ByVal generatortype As Boolean)
+            LoginToken = ILoginToken
+            Resource = IResource
+            UAKOwner = ""
+            If (generatortype) Then
+                TokenSecret = internalgenerator(owner.ToLower().Trim(), ISecret)
+            Else
+                TokenSecret = internalgenerator2(owner.ToLower().Trim(), ISecret)
+            End If
+            TokenSecret = Convert.ToBase64String(GenSHA512Byte(TokenSecret))
+            Hexa8RAhost = "hexaeight-sso-platform.p.rapidapi.com"
+            xhttpClient = New HttpClient()
+        End Sub
+
+
+        Public Sub SetLoginToken(ByVal token As String)
+            Try
+                LoginToken = token
+            Catch ex As Exception
+            End Try
+        End Sub
+        Public Sub SetResource(ByVal resourcename As String)
+            Try
+                Resource = resourcename
+            Catch ex As Exception
+            End Try
+        End Sub
+
 
         Public Sub SetRapidAPIKey(ByVal APIKey As String)
             RapidAPIKey = APIKey
@@ -1420,7 +1541,8 @@ Namespace HexaEight
             Get_sharedkey_usingname_url = "https://" + Hexa8RAhost + "/get-sharedkey-usingname?rapidapi-key=" + RapidAPIKey
             Get_presharedkey_usingname_url = "https://" + Hexa8RAhost + "/get-presharedkey-usingname?rapidapi-key=" + RapidAPIKey
             Get_clientappsharedkey_usingname_url = "https://" + Hexa8RAhost + "/fetch-dest-clientsk?rapidapi-key=" + RapidAPIKey
-
+            Get_captcha_url = "https://" + Hexa8RAhost + "/fetch-captcha-for-emailid?rapidapi-key=" + RapidAPIKey
+            Get_captcha4captchaid_url = "https://hexaeight.com/fetch-captcha-for-captchaid"
         End Sub
         Public Sub SetDataLocation(ByVal Location As String)
             DBLocation = "Filename='" + DBLocation + "HESession.db';connection=shared"
@@ -1443,10 +1565,10 @@ Namespace HexaEight
         End Sub
 
 
-        Public Function GetSharedKeyByKnownName(ByVal Recipient As String) As String
-            Dim Preauthkeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+        Public Async Function GetSharedKeyByKnownName(ByVal Recipient As String) As Task(Of String)
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
             If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
-                Dim HexaEightSharedKeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
                 If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
                     Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
                     Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
@@ -1458,7 +1580,7 @@ Namespace HexaEight
                         If hebytes.Count > 0 Then
                             Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
                             'Dim serverresponse = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-usingname", htmlbody, "")
-                            Dim serverresponse = PerformHttpWebRequest(LoginToken, Get_sharedkey_usingname_url, htmlbody, "")
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, Get_sharedkey_usingname_url, htmlbody, "")
                             Dim newresourceresponse As String = ""
                             If serverresponse.StartsWith("HEEnc:") Then
                                 newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
@@ -1491,17 +1613,25 @@ Namespace HexaEight
             End If
         End Function
 
-        Public Function GetSharedKeyForClientApp(ByVal token As String) As String
-            Return PerformHttpWebRequest(LoginToken, Get_clientappsharedkey_usingname_url, token, "")
+        Public Async Function GetSharedKeyForClientApp(ByVal token As String) As Task(Of String)
+            Return Await PerformHttpWebRequest(LoginToken, Get_clientappsharedkey_usingname_url, token, "")
         End Function
 
-        Public Function GetPreSharedKeyByKnownName(ByVal Recipient As String, ByVal UnixTimeStamp As String) As String
+        Public Async Function GetCaptchaForEmail(ByVal token As String) As Task(Of String)
+            Return Await PerformHttpWebRequest(LoginToken, Get_captcha_url, token, "")
+        End Function
+        Public Async Function GetCaptchaForCaptchaId(ByVal token As String) As Task(Of String)
+            Return Await PerformHttpWebRequest(LoginToken, Get_captcha4captchaid_url, token, "")
+        End Function
+
+
+        Public Async Function GetPreSharedKeyByKnownName(ByVal Recipient As String, ByVal UnixTimeStamp As String) As Task(Of String)
             If ((DateTime.UtcNow - New DateTime(1970, 1, 1, 0, 0, 0)).TotalMinutes - CInt(UnixTimeStamp)) > 60 Then
                 Return "-4"
             End If
-            Dim Preauthkeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+            Dim Preauthkeys As String = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
             If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
-                Dim HexaEightSharedKeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
                 If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
                     Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
                     Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
@@ -1513,7 +1643,7 @@ Namespace HexaEight
                         If hebytes.Count > 0 Then
                             Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
                             'Dim serverresponse = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-presharedkey-usingname", htmlbody, "")
-                            Dim serverresponse = PerformHttpWebRequest(LoginToken, Get_presharedkey_usingname_url, htmlbody, "")
+                            Dim serverresponse As String = Await PerformHttpWebRequest(LoginToken, Get_presharedkey_usingname_url, htmlbody, "")
                             Dim newresourceresponse As String = ""
                             If serverresponse.StartsWith("HEEnc:") Then
                                 newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
@@ -1547,14 +1677,90 @@ Namespace HexaEight
         End Function
 
 
-
-
-
-
-        Public Function EncryptMessageByKnownName(ByVal Recipient As String, ByVal Message As String) As String
-            Dim Preauthkeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+        Public Async Function GetSessionKeys(ByVal SessionID As String) As Task(Of String)
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
             If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
-                Dim HexaEightSharedKeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
+                    Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
+                    Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
+                    Dim GeneratedToken = BigInteger.Multiply(GeneratedToken1, GeneratedToken2)
+                    Dim jsonstringreq = ""
+                    If Resource <> "" Then
+                        jsonstringreq = BuildJsonData("GETSESSIONKEYS", Resource, Resource, "SESSIONID|" + SessionID)
+                        Dim hebytes = Convert2QuickHEBytes(jsonstringreq)
+                        If hebytes.Count > 0 Then
+                            Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sessionID-url", htmlbody, "")
+                            Dim newresourceresponse As String = ""
+                            If serverresponse.StartsWith("HEEnc:") Then
+                                newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
+                                Try
+                                    Dim responsetemplate = New With {Key .REQUEST = "", .SENDER = "", .RECEIVER = "", .BODY = ""}
+                                    Dim responsedata = JsonConvert.DeserializeAnonymousType(newresourceresponse, responsetemplate)
+                                    If responsedata.BODY.ToString().StartsWith("SessionURL|") Then
+                                        Dim SessionURL = responsedata.BODY.ToString().Split("|")(1)
+                                        Return SessionURL
+                                    Else
+                                        Return ""
+                                    End If
+                                Catch ex As Exception
+                                    Return ""
+                                End Try
+                            Else
+                                Return ""
+                            End If
+                        Else
+                            Return ""
+                        End If
+                    Else
+                        Return ""
+                    End If
+                Else
+                    Return ""
+                End If
+            Else
+                Return ""
+            End If
+        End Function
+
+
+        Public Async Function NotifySessionCaptureCompleted(ByVal SessionID As String) As Task(Of String)
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+            If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
+                    Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
+                    Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
+                    Dim GeneratedToken = BigInteger.Multiply(GeneratedToken1, GeneratedToken2)
+                    Dim jsonstringreq = ""
+                    If Resource <> "" Then
+                        jsonstringreq = BuildJsonData("REMOVESESSION", Resource, Resource, "SESSIONID|" + SessionID)
+                        Dim hebytes = Convert2QuickHEBytes(jsonstringreq)
+                        If hebytes.Count > 0 Then
+                            Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/session-auth-completed", htmlbody, "")
+                            Return serverresponse
+                        Else
+                            Return ""
+                        End If
+                    Else
+                        Return ""
+                    End If
+                Else
+                    Return ""
+                End If
+            Else
+                Return ""
+            End If
+        End Function
+
+
+        Public Async Function EncryptMessageByKnownName(ByVal Recipient As String, ByVal Message As String) As Task(Of String)
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+            If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
                 If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
                     Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
                     Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
@@ -1566,7 +1772,7 @@ Namespace HexaEight
                         If hebytes.Count > 0 Then
                             Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
                             'Dim serverresponse = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-usingname", htmlbody, "")
-                            Dim serverresponse = PerformHttpWebRequest(LoginToken, Get_sharedkey_usingname_url, htmlbody, "")
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, Get_sharedkey_usingname_url, htmlbody, "")
                             Dim newresourceresponse As String = ""
                             If serverresponse.StartsWith("HEEnc:") Then
                                 newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
@@ -1633,7 +1839,7 @@ Namespace HexaEight
                     Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
                     Dim GeneratedToken = BigInteger.Multiply(GeneratedToken1, GeneratedToken2)
                     Dim jsonmessagereq As String = ""
-                    jsonmessagereq = BuildJsonData("DATAMESSAGE", Source, Recipient, Message)
+                    jsonmessagereq = BuildJsonData("DATAMESSAGE", UAKOwner.Trim(), Recipient, Message)
                     Dim msgbytes As Byte() = Convert2QuickHEBytes(jsonmessagereq)
                     Dim messagebody = Convert.ToBase64String(CreateV3EncryptedRequestForUser(msgbytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(UAK)), New BigInteger(Convert.FromBase64String(AsymetricSharedkey.Split(":")(2)))))
                     Return messagebody
@@ -1729,10 +1935,10 @@ Namespace HexaEight
         End Function
 
 
-        Public Function DecryptMessageByKnownName(ByVal Recipient As String, ByVal EncryptedMessage As String) As String
-            Dim Preauthkeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+        Public Async Function DecryptMessageByKnownName(ByVal Recipient As String, ByVal EncryptedMessage As String) As Task(Of String)
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
             If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
-                Dim HexaEightSharedKeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
                 If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
                     Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
                     Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
@@ -1744,7 +1950,7 @@ Namespace HexaEight
                         If hebytes.Count > 0 Then
                             Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
                             'Dim serverresponse = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-usingname", htmlbody, "")
-                            Dim serverresponse = PerformHttpWebRequest(LoginToken, Get_sharedkey_usingname_url, htmlbody, "")
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, Get_sharedkey_usingname_url, htmlbody, "")
                             Dim newresourceresponse As String = ""
                             If serverresponse.StartsWith("HEEnc:") Then
                                 newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
@@ -1789,7 +1995,7 @@ Namespace HexaEight
             End If
         End Function
 
-        Public Function DecryptMessageUsingHEToken(ByVal EncryptedMessage As String) As String
+        Public Async Function DecryptMessageUsingHEToken(ByVal EncryptedMessage As String) As Task(Of String)
             Dim encryptedtoken As String = ""
             Dim encrypteddata As String = ""
             Try
@@ -1798,9 +2004,9 @@ Namespace HexaEight
             Catch ex As Exception
                 Return ""
             End Try
-            Dim Preauthkeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
             If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
-                Dim HexaEightSharedKeys = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
                 If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
                     Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
                     Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
@@ -1812,7 +2018,7 @@ Namespace HexaEight
                         If hebytes.Count > 0 Then
                             Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
                             'Dim serverresponse = PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-usingtoken", htmlbody, "")
-                            Dim serverresponse = PerformHttpWebRequest(LoginToken, Get_sharedkey_usingtoken_url, htmlbody, "")
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, Get_sharedkey_usingtoken_url, htmlbody, "")
                             Dim newresourceresponse As String = ""
                             If serverresponse.StartsWith("HEEnc:") Then
                                 newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
@@ -1858,6 +2064,260 @@ Namespace HexaEight
             End If
         End Function
 
+
+
+
+        Public Async Function CreateSimpleSession() As Task(Of String)
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+            If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
+                    Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
+                    Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
+                    Dim GeneratedToken = BigInteger.Multiply(GeneratedToken1, GeneratedToken2)
+                    Dim jsonstringreq = ""
+                    If Resource <> "" Then
+                        jsonstringreq = BuildJsonData("Create-Simple-Session", Resource, "www.hexaeight.com", "Create Simple Session")
+                        Dim hebytes = Convert2QuickHEBytes(jsonstringreq)
+                        If hebytes.Count > 0 Then
+                            Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/create-simple-session", htmlbody, "")
+                            Dim newresourceresponse As String = ""
+                            If serverresponse.StartsWith("HEEnc:") Then
+                                newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
+                                Try
+                                    Dim responsetemplate = New With {Key .REQUEST = "", .SENDER = "", .RECEIVER = "", .BODY = ""}
+                                    Dim responsedata = JsonConvert.DeserializeAnonymousType(newresourceresponse, responsetemplate)
+
+                                    If responsedata.BODY.ToString().StartsWith("NewHESimpleSessionID") And responsedata.REQUEST.ToString() = "RESPONSE-FROM-HE" And responsedata.SENDER.ToString() = "HexaEight" Then
+                                        Dim SimpleSessionID = responsedata.BODY.ToString()
+                                        Return SimpleSessionID
+                                    Else
+                                        Return ""
+                                    End If
+                                Catch ex As Exception
+                                    Return ""
+                                End Try
+                            Else
+                                Return ""
+                            End If
+                        Else
+                            Return ""
+                        End If
+                    Else
+                        Return ""
+                    End If
+                Else
+                    Return ""
+                End If
+            Else
+                Return ""
+            End If
+        End Function
+
+
+        Public Function GetInitialCookie(ByVal SessionData As String) As String
+            Try
+                Dim Xsession = New HESession With {
+                .Id = SessionData.Split("|")(1),
+                .EncryptedID = SessionData.Split("|")(2),
+                .Pin = SessionData.Split("|")(3)
+                }
+                Return "HEClientID." + EncryptProvider.AESEncrypt("Unknown" + ":ValidationPending:" + SessionData, SafeKey)
+            Catch ex As Exception
+                Console.WriteLine(ex.Message)
+                Return ""
+            End Try
+        End Function
+
+        Public Function ValidateAuthenticatedCookie(ByVal CookieData As String) As Boolean
+            Try
+                Dim SessionData = EncryptProvider.AESDecrypt(CookieData.Replace("HEAuthClientID.", ""), SafeKey)
+                If SessionData.Contains(":ValidatedUser:") Then
+                    Return True
+                Else
+                    Return False
+                End If
+            Catch ex As Exception
+                Console.WriteLine(ex.Message)
+                Return False
+            End Try
+        End Function
+
+        Public Function ValidateHTTPCookie(ByVal CookieData As String) As Boolean
+            Try
+                Dim SessionData = EncryptProvider.AESDecrypt(CookieData.Replace("HEClientID.", ""), SafeKey)
+                If SessionData.Contains(":ValidatedUser:") Then
+                    Return True
+                Else
+                    Return False
+                End If
+            Catch ex As Exception
+                Console.WriteLine(ex.Message)
+                Return False
+            End Try
+        End Function
+
+
+        Public Function GetUserFromAuthCookie(ByVal CookieData As String) As String
+            Try
+                Dim SessionData = EncryptProvider.AESDecrypt(CookieData.Replace("HEAuthClientID.", ""), SafeKey)
+                If SessionData.Contains(":ValidatedUser:") Then
+                    Return SessionData.Split(":")(0)
+                Else
+                    Return ""
+                End If
+            Catch ex As Exception
+                Return ""
+            End Try
+        End Function
+
+        Public Function GetUserFromHttpCookie(ByVal CookieData As String) As String
+            Try
+                Dim SessionData = EncryptProvider.AESDecrypt(CookieData.Replace("HEClientID.", ""), SafeKey)
+                If SessionData.Contains(":ValidatedUser:") Then
+                    Return SessionData.Split(":")(0)
+                Else
+                    Return ""
+                End If
+            Catch ex As Exception
+                Return ""
+            End Try
+        End Function
+
+
+
+
+
+        Public Function GetQRCodeFromCookie(ByVal CookieData As String) As String
+            Try
+                Dim SessionData = EncryptProvider.AESDecrypt(CookieData.Replace("HEClientID.", ""), SafeKey).Split(":")(2)
+                Dim Xsession = New HESession With {
+                .Id = SessionData.Split("|")(1),
+                .EncryptedID = SessionData.Split("|")(2),
+                .Pin = SessionData.Split("|")(3)
+                }
+                Return Xsession.EncryptedID
+            Catch ex As Exception
+                Return ""
+            End Try
+        End Function
+        Public Function GetValidatedCookie(ByVal unAuthenticatedCookieData As String, ByVal sessionuser As String) As String
+            Try
+                Dim SessionData = EncryptProvider.AESDecrypt(unAuthenticatedCookieData.Replace("HEClientID.", ""), SafeKey).Split(":")(2)
+                Dim Xsession = New HESession With {
+                .Id = SessionData.Split("|")(1),
+                .EncryptedID = SessionData.Split("|")(2),
+                .Pin = SessionData.Split("|")(3)
+                }
+                Return EncryptProvider.AESEncrypt(sessionuser + ":ValidatedUser:" + SessionData, SafeKey)
+            Catch ex As Exception
+                Console.WriteLine(ex.Message)
+                Return ""
+            End Try
+        End Function
+
+        Public Function GetSessionIDFromCookie(ByVal CookieData As String) As String
+            Try
+                Dim SessionData = EncryptProvider.AESDecrypt(CookieData.Replace("HEClientID.", ""), SafeKey).Split(":")(2)
+                Dim Xsession = New HESession With {
+                .Id = SessionData.Split("|")(1),
+                .EncryptedID = SessionData.Split("|")(2),
+                .Pin = SessionData.Split("|")(3)
+                }
+                Return Xsession.Id
+            Catch ex As Exception
+                Return ""
+            End Try
+        End Function
+
+
+
+        Public Function GetSessionUser(ByVal CookieValue As String) As String
+            If CookieValue.Trim() = "" Then
+                Return ""
+            End If
+            Dim SessionData = EncryptProvider.AESDecrypt(CookieValue.Replace("HEClientID.", ""), SafeKey)
+            If SessionData.Contains(":ValidationPending:") Then
+                Try
+                    Dim Xsession = New HESession With {
+                    .Id = SessionData.Split("|")(1),
+                    .EncryptedID = SessionData.Split("|")(2),
+                    .Pin = SessionData.Split("|")(3)
+                    }
+                    Dim sessionkeys As String = ""
+                    Dim retry = 0
+                    While retry < 3
+                        sessionkeys = GetSessionKeys(Xsession.Id).Result
+                        If sessionkeys <> "" Then
+                            Exit While
+                        End If
+                        retry = retry + 1
+                    End While
+                    Dim sessionuser = GetSessionFromHESessionDB(sessionkeys)
+                    If sessionuser <> "" Then
+                        Dim status = NotifySessionCaptureCompleted(Xsession.Id)
+                    End If
+                    Return sessionuser
+                    'Return sessionOwner
+                Catch ex As Exception
+                    Console.WriteLine(ex.Message)
+                    Return ""
+                End Try
+            Else
+                Return "Invalid Cookie Data"
+            End If
+        End Function
+
+
+        Public Async Function Create2FAuthSession() As Task(Of String)
+            Dim Preauthkeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-preauth-keys", "", "")
+            If Preauthkeys <> "" AndAlso Preauthkeys IsNot Nothing Then
+                Dim HexaEightSharedKeys = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/get-sharedkey-for-hexaeight", "", "")
+                If HexaEightSharedKeys <> "" AndAlso HexaEightSharedKeys IsNot Nothing Then
+                    Dim GeneratedToken1 As BigInteger = New BigInteger(GenerateSHA512Byte(Resource))
+                    Dim GeneratedToken2 As BigInteger = New BigInteger(Convert.FromBase64String(TokenSecret))
+                    Dim GeneratedToken = BigInteger.Multiply(GeneratedToken1, GeneratedToken2)
+                    Dim jsonstringreq = ""
+                    If Resource <> "" Then
+                        jsonstringreq = BuildJsonData("Create-2FAuth-Session", Resource, "www.hexaeight.com", "Create 2FAuth Session")
+                        Dim hebytes = Convert2QuickHEBytes(jsonstringreq)
+                        If hebytes.Count > 0 Then
+                            Dim htmlbody = Convert.ToBase64String(CreateV3EncryptedRequestForDestination(hebytes, GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys))))
+                            Dim serverresponse = Await PerformHttpWebRequest(LoginToken, "https://hexaeight.com/create-2fauth-session", htmlbody, "")
+                            Dim newresourceresponse As String = ""
+                            If serverresponse.StartsWith("HEEnc:") Then
+                                newresourceresponse = DecryptV3EncryptedRequestFromDestination(Convert.FromBase64String(serverresponse.Split(":")(1)), GeneratedToken, New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(0)))), New BigInteger(Convert.FromBase64String((Preauthkeys.Split(":")(1)))), New BigInteger(Convert.FromBase64String(HexaEightSharedKeys)))
+                                Try
+                                    Dim responsetemplate = New With {Key .REQUEST = "", .SENDER = "", .RECEIVER = "", .BODY = ""}
+                                    Dim responsedata = JsonConvert.DeserializeAnonymousType(newresourceresponse, responsetemplate)
+
+                                    If responsedata.BODY.ToString().StartsWith("NewHE2FAuthSessionID") And responsedata.REQUEST.ToString() = "RESPONSE-FROM-HE" And responsedata.SENDER.ToString() = "HexaEight" Then
+                                        Dim SimpleSessionID = responsedata.BODY.ToString()
+                                        Return SimpleSessionID
+                                    Else
+                                        Return ""
+                                    End If
+                                Catch ex As Exception
+                                    Return ""
+                                End Try
+                            Else
+                                Return ""
+                            End If
+                        Else
+                            Return ""
+                        End If
+                    Else
+                        Return ""
+                    End If
+                Else
+                    Return ""
+                End If
+            Else
+                Return ""
+            End If
+        End Function
+    End Class
 
 
 End Namespace
